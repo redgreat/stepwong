@@ -1,0 +1,30 @@
+name: 刷步数
+
+on:
+  schedule:
+    - cron: '34 1,7,10,12,14,23 * * *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout codes
+        uses: actions/checkout@v4
+      - name: Update system and install zsh
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get install zsh -y
+          
+      - name: Init Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: 3.8
+          
+      - name: Start
+        env:
+            CONFIG: ${{ secrets.CONFIG }}
+        run: |
+          pip3 install requests pytz
+          python3 main.py
