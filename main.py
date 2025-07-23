@@ -277,37 +277,42 @@ def run_single_account(total, idx, user_mi, passwd_mi):
 
 
 def execute():
-    user_list = users.split('#')
-    passwd_list = passwords.split('#')
-    exec_results = []
-    if len(user_list) == len(passwd_list):
-        idx, total = 0, len(user_list)
-        if use_concurrent:
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                exec_results = executor.map(lambda x: run_single_account(total, x[0], *x[1]),
-                                            enumerate(zip(user_list, passwd_list)))
+    try:
+        user_list = users.split('#')
+        passwd_list = passwords.split('#')
+        exec_results = []
+        if len(user_list) == len(passwd_list):
+            idx, total = 0, len(user_list)
+            if use_concurrent:
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    exec_results = executor.map(lambda x: run_single_account(total, x[0], *x[1]),
+                                                enumerate(zip(user_list, passwd_list)))
+            else:
+                for user_mi, passwd_mi in zip(user_list, passwd_list):
+                    exec_results.append(run_single_account(total, idx, user_mi, passwd_mi))
+                    idx += 1
+                    if idx < total:
+                        # 每个账号之间间隔一定时间请求一次，避免接口请求过于频繁导致异常
+                        time.sleep(sleep_seconds)
+
+            success_count = 0
+            push_results = []
+            for result in exec_results:
+                push_results.append(result)
+                if result['success'] is True:
+                    success_count += 1
+            summary = f"\n执行账号总数{total}，成功：{success_count}，失败：{total - success_count}"
+            print(summary)
+            # 成功后不再推送，异常的时候再推送
+            # push_to_push_plus(push_results, summary)
         else:
-            for user_mi, passwd_mi in zip(user_list, passwd_list):
-                exec_results.append(run_single_account(total, idx, user_mi, passwd_mi))
-                idx += 1
-                if idx < total:
-                    # 每个账号之间间隔一定时间请求一次，避免接口请求过于频繁导致异常
-                    time.sleep(sleep_seconds)
-
-        success_count = 0
-        push_results = []
-        for result in exec_results:
-            push_results.append(result)
-            if result['success'] is True:
-                success_count += 1
-        summary = f"\n执行账号总数{total}，成功：{success_count}，失败：{total - success_count}"
-        print(summary)
-        push_to_push_plus(push_results, summary)
-    else:
-        print(f"账号数长度[{len(user_list)}]和密码数长度[{len(passwd_list)}]不匹配，跳过执行")
+            print(f"账号数长度[{len(user_list)}]和密码数长度[{len(passwd_list)}]不匹配，跳过执行")
+            exit(1)
+    except:
+        print(f"执行异常:{traceback.format_exc()}")
+        push_plus(f"{format_now()} 刷步数通知", f"执行异常:{traceback.format_exc()}")
         exit(1)
-
 
 if __name__ == "__main__":
     # 北京时间
