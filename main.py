@@ -1,6 +1,7 @@
 # -*- coding: utf8 -*-
 import math
 import traceback
+import urllib
 from datetime import datetime
 import pytz
 
@@ -11,6 +12,7 @@ import time
 import os
 
 import requests
+from Crypto.Cipher import AES
 
 
 # 获取北京时间
@@ -18,6 +20,17 @@ def get_beijing_time():
     target_timezone = pytz.timezone('Asia/Shanghai')
     # 获取当前时间
     return datetime.now().astimezone(target_timezone)
+
+
+# 参考自 https://github.com/hanximeng/Zepp_API/blob/main/index.php
+def encrypt_data(plain: bytes) -> bytes:
+    key = b'xeNtBVqzDc6tuNTh'  # 16 bytes
+    iv = b'MAAAYAAAAAAAAABg'  # 16 bytes
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    # AES-128-CBC 使用 PKCS#7 填充。
+    pad_len = AES.block_size - (len(plain) % AES.block_size)
+    padded = plain + bytes([pad_len]) * pad_len
+    return cipher.encrypt(padded)
 
 
 # 格式化时间
@@ -74,7 +87,7 @@ def get_access_token(location):
 
 # pushplus消息推送
 def push_plus(title, content):
-    requesturl = f"http://www.pushplus.plus/send"
+    requestUrl = f"http://www.pushplus.plus/send"
     data = {
         "token": PUSH_PLUS_TOKEN,
         "title": title,
@@ -83,7 +96,7 @@ def push_plus(title, content):
         "channel": "wechat"
     }
     try:
-        response = requests.post(requesturl, data=data)
+        response = requests.post(requestUrl, data=data)
         if response.status_code == 200:
             json_res = response.json()
             print(f"pushplus推送完毕：{json_res['code']}-{json_res['msg']}")
@@ -114,29 +127,43 @@ class MiMotionRunner:
             self.is_phone = False
         self.user = user
         self.fake_ip_addr = fake_ip()
-        self.log_str += f"创建虚拟ip地址：{self.fake_ip_addr}\n"
+        # self.log_str += f"创建虚拟ip地址：{self.fake_ip_addr}\n"
 
     # 登录
     def login(self):
 
-        url1 = "https://api-user.huami.com/registrations/" + self.user + "/tokens"
-        login_headers = {
-            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2",
-            "X-Forwarded-For": self.fake_ip_addr
+        headers = {
+            "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "user-agent": "MiFit6.14.0 (M2007J1SC; Android 12; Density/2.75)",
+            "app_name": "com.xiaomi.hm.health",
+            "appname": "com.xiaomi.hm.health",
+            "appplatform": "android_phone",
+            "x-hm-ekv": "1",
+            "hm-privacy-ceip": "false"
         }
-        data1 = {
-            "client_id": "HuaMi",
-            "password": f"{self.password}",
-            "redirect_uri": "https://s3-us-west-2.amazonaws.com/hm-registration/successsignin.html",
-            "token": "access"
+
+        login_data = {
+            'emailOrPhone': self.user,
+            'password': self.password,
+            'state': 'REDIRECTION',
+            'client_id': 'HuaMi',
+            'country_code': 'CN',
+            'token': 'access',
+            'redirect_uri': 'https://s3-us-west-2.amazonaws.com/hm-registration/successsignin.html',
         }
-        r1 = requests.post(url1, data=data1, headers=login_headers, allow_redirects=False)
+        # 等同 http_build_query，默认使用 quote_plus 将空格转为 '+'
+        query = urllib.parse.urlencode(login_data)
+        plaintext = query.encode('utf-8')
+        # 执行请求加密
+        cipher_data = encrypt_data(plaintext)
+
+        url1 = 'https://api-user.zepp.com/v2/registrations/tokens'
+        r1 = requests.post(url1, data=cipher_data, headers=headers, allow_redirects=False)
         if r1.status_code != 303:
             self.log_str += "登录异常，status: %d\n" % r1.status_code
             return 0, 0
-        location = r1.headers["Location"]
         try:
+            location = r1.headers["Location"]
             code = get_access_token(location)
             if code is None:
                 self.log_str += "获取accessToken失败\n"
@@ -175,7 +202,7 @@ class MiMotionRunner:
                 "source": "com.xiaomi.hm.health",
                 "third_name": "email",
             }
-        r2 = requests.post(url2, data=data2, headers=login_headers).json()
+        r2 = requests.post(url2, data=data2, headers=headers).json()
         login_token = r2["token_info"]["login_token"]
         # print("login_token获取成功！")
         # print(login_token)
@@ -188,7 +215,7 @@ class MiMotionRunner:
     # 获取app_token
     def get_app_token(self, login_token):
         url = f"https://account-cn.huami.com/v1/client/app_tokens?app_name=com.xiaomi.hm.health&dn=api-user.huami.com%2Capi-mifit.huami.com%2Capp-analytics.huami.com&login_token={login_token}"
-        headers = {'User-Agent': 'MiFit/5.3.0 (iPhone; iOS 14.7.1; Scale/3.00)', 'X-Forwarded-For': self.fake_ip_addr}
+        headers = {'User-Agent': 'MiFit/5.3.0 (iPhone; iOS 14.7.1; Scale/3.00)'}
         response = requests.get(url, headers=headers).json()
         app_token = response['token_info']['app_token']
         # print("app_token获取成功！")
@@ -221,8 +248,7 @@ class MiMotionRunner:
         url = f'https://api-mifit-cn.huami.com/v1/data/band_data.json?&t={t}'
         head = {
             "apptoken": app_token,
-            "Content-Type": "application/x-www-form-urlencoded",
-            "X-Forwarded-For": self.fake_ip_addr
+            "Content-Type": "application/x-www-form-urlencoded"
         }
 
         data = f'userid={userid}&last_sync_data_time=1597306380&device_type=0&last_deviceid=DA932FFFFE8816E7&data_json={data_json}'
@@ -277,42 +303,37 @@ def run_single_account(total, idx, user_mi, passwd_mi):
 
 
 def execute():
-    try:
-        user_list = users.split('#')
-        passwd_list = passwords.split('#')
-        exec_results = []
-        if len(user_list) == len(passwd_list):
-            idx, total = 0, len(user_list)
-            if use_concurrent:
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    exec_results = executor.map(lambda x: run_single_account(total, x[0], *x[1]),
-                                                enumerate(zip(user_list, passwd_list)))
-            else:
-                for user_mi, passwd_mi in zip(user_list, passwd_list):
-                    exec_results.append(run_single_account(total, idx, user_mi, passwd_mi))
-                    idx += 1
-                    if idx < total:
-                        # 每个账号之间间隔一定时间请求一次，避免接口请求过于频繁导致异常
-                        time.sleep(sleep_seconds)
-
-            success_count = 0
-            push_results = []
-            for result in exec_results:
-                push_results.append(result)
-                if result['success'] is True:
-                    success_count += 1
-            summary = f"\n执行账号总数{total}，成功：{success_count}，失败：{total - success_count}"
-            print(summary)
-            # 成功后不再推送，异常的时候再推送
-            # push_to_push_plus(push_results, summary)
+    user_list = users.split('#')
+    passwd_list = passwords.split('#')
+    exec_results = []
+    if len(user_list) == len(passwd_list):
+        idx, total = 0, len(user_list)
+        if use_concurrent:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                exec_results = executor.map(lambda x: run_single_account(total, x[0], *x[1]),
+                                            enumerate(zip(user_list, passwd_list)))
         else:
-            print(f"账号数长度[{len(user_list)}]和密码数长度[{len(passwd_list)}]不匹配，跳过执行")
-            exit(1)
-    except:
-        print(f"执行异常:{traceback.format_exc()}")
-        push_plus(f"{format_now()} 刷步数通知", f"执行异常:{traceback.format_exc()}")
+            for user_mi, passwd_mi in zip(user_list, passwd_list):
+                exec_results.append(run_single_account(total, idx, user_mi, passwd_mi))
+                idx += 1
+                if idx < total:
+                    # 每个账号之间间隔一定时间请求一次，避免接口请求过于频繁导致异常
+                    time.sleep(sleep_seconds)
+
+        success_count = 0
+        push_results = []
+        for result in exec_results:
+            push_results.append(result)
+            if result['success'] is True:
+                success_count += 1
+        summary = f"\n执行账号总数{total}，成功：{success_count}，失败：{total - success_count}"
+        print(summary)
+        push_to_push_plus(push_results, summary)
+    else:
+        print(f"账号数长度[{len(user_list)}]和密码数长度[{len(passwd_list)}]不匹配，跳过执行")
         exit(1)
+
 
 if __name__ == "__main__":
     # 北京时间
