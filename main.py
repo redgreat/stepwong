@@ -14,7 +14,6 @@ import time
 import os
 
 import requests
-from Crypto.Cipher import AES
 
 try:
     from Crypto.Cipher import AES
@@ -33,7 +32,7 @@ def get_beijing_time():
 
 
 # 参考自 https://github.com/hanximeng/Zepp_API/blob/main/index.php
-def encrypt_data(plain: bytes) -> bytes:
+def encrypt_login_data(plain: bytes) -> bytes:
     key = b'xeNtBVqzDc6tuNTh'  # 16 bytes
     iv = b'MAAAYAAAAAAAAABg'  # 16 bytes
     cipher = AES.new(key, AES.MODE_CBC, iv)
@@ -207,6 +206,12 @@ class MiMotionRunner:
         self.user = user
         self.fake_ip_addr = fake_ip()
         # self.log_str += f"创建虚拟ip地址：{self.fake_ip_addr}\n"
+        try:
+            self.log_str += "初始化 Runner 完成\n"
+            self.log_str += f"设备ID:{self.device_id} 虚拟IP:{self.fake_ip_addr}\n"
+            self.log_str += f"账号类型:{'手机号' if self.is_phone else '邮箱'}\n"
+        except Exception:
+            pass
 
     # 登录
     def login(self):
@@ -229,11 +234,15 @@ class MiMotionRunner:
                 self.log_str += f"缓存的 token 不完整，重新登录\n"
         
         # 缓存失效或不存在，执行完整登录流程
-        url1 = "https://api-user.huami.com/registrations/" + self.user + "/tokens"
+        url1 = "https://api-user.zepp.com/v2/registrations/tokens"
         login_headers = {
-            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2",
-            "X-Forwarded-For": self.fake_ip_addr
+            "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "user-agent": "MiFit6.14.0 (M2007J1SC; Android 12; Density/2.75)",
+            "app_name": "com.xiaomi.hm.health",
+            "appname": "com.xiaomi.hm.health",
+            "appplatform": "android_phone",
+            "x-hm-ekv": "1",
+            "hm-privacy-ceip": "false"
         }
 
         login_data = {
@@ -249,15 +258,30 @@ class MiMotionRunner:
         query = urllib.parse.urlencode(login_data)
         plaintext = query.encode('utf-8')
         # 执行请求加密
-        cipher_data = encrypt_data(plaintext)
-
-        url1 = 'https://api-user.zepp.com/v2/registrations/tokens'
-        r1 = requests.post(url1, data=cipher_data, headers=headers, allow_redirects=False)
-        if r1.status_code != 303:
-            self.log_str += "登录异常，status: %d\n" % r1.status_code
+        cipher_data = encrypt_login_data(plaintext)
+        try:
+            self.log_str += f"登录参数加密完成，长度:{len(cipher_data)}\n"
+        except Exception:
+            pass
+        r1 = None
+        session = requests.Session()
+        for attempt in range(2):
+            r1 = session.post(url1, data=cipher_data, headers=login_headers, allow_redirects=False, timeout=10)
+            if r1.status_code == 303:
+                break
+            if r1.status_code == 429:
+                self.log_str += f"v2登录限流(429)，第{attempt + 1}次重试\n"
+                time.sleep(2 + attempt)
+                continue
+            self.log_str += f"v2登录异常，status: {r1.status_code}\n"
+            self.log_str += f"响应片段: {r1.text[:120]}\n"
+            return 0, 0
+        if r1 is None or r1.status_code != 303:
+            self.log_str += "登录失败，未获取重定向\n"
             return 0, 0
         try:
             location = r1.headers["Location"]
+            self.log_str += "登录第一步成功，Location 解析完成\n"
             code = get_access_token(location)
             if code is None:
                 self.log_str += "获取accessToken失败\n"
@@ -267,10 +291,20 @@ class MiMotionRunner:
             return 0, 0
 
         url2 = "https://account.huami.com/v2/client/login"
+        client_headers = {
+            "app_name": "com.xiaomi.hm.health",
+            "x-request-id": f"{str(uuid.uuid4())}",
+            "accept-language": "zh-CN",
+            "appname": "com.xiaomi.hm.health",
+            "cv": "50818_6.14.0",
+            "v": "2.0",
+            "appplatform": "android_phone",
+            "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+        }
         if self.is_phone:
             data2 = {
                 "app_name": "com.xiaomi.hm.health",
-                "app_version": "4.6.0",
+                "app_version": "6.14.0",
                 "code": f"{code}",
                 "country_code": "CN",
                 "device_id": self.device_id,  # 使用实例的 device_id
@@ -282,22 +316,22 @@ class MiMotionRunner:
             data2 = {
                 "allow_registration=": "false",
                 "app_name": "com.xiaomi.hm.health",
-                "app_version": "6.3.5",
+                "app_version": "6.14.0",
                 "code": f"{code}",
                 "country_code": "CN",
                 "device_id": self.device_id,  # 使用实例的 device_id
-                "device_model": "phone",
-                "dn": "api-user.huami.com%2Capi-mifit.huami.com%2Capp-analytics.huami.com",
+                "device_model": "android_phone",
+                "dn": "account.zepp.com%2Capi-user.zepp.com%2Capi-mifit.zepp.com%2Capi-watch.zepp.com%2Capp-analytics.zepp.com%2Capi-analytics.huami.com%2Cauth.zepp.com",
                 "grant_type": "access_token",
                 "lang": "zh_CN",
                 "os_version": "1.5.0",
-                "source": "com.xiaomi.hm.health",
+                "source": "com.xiaomi.hm.health:6.14.0:50818",
                 "third_name": "email",
             }
         
         # 添加响应检查和错误处理
         try:
-            r2 = requests.post(url2, data=data2, headers=login_headers)
+            r2 = requests.post(url2, data=data2, headers=client_headers, timeout=15)
             if r2.status_code != 200:
                 self.log_str += f"获取login_token失败，HTTP状态码: {r2.status_code}\n"
                 self.log_str += f"响应内容: {r2.text[:200]}\n"
@@ -314,7 +348,12 @@ class MiMotionRunner:
             
             login_token = r2_json["token_info"]["login_token"]
             userid = r2_json["token_info"]["user_id"]
+            app_token_inline = r2_json["token_info"].get("app_token")
             self.userid = userid
+            try:
+                self.log_str += "登录第二步成功，login_token 与 userid 获取完成\n"
+            except Exception:
+                pass
             
             # 保存到缓存
             user_token_info = dict()
@@ -322,6 +361,9 @@ class MiMotionRunner:
             user_token_info["userid"] = userid
             user_token_info["device_id"] = self.device_id
             user_token_info["login_time"] = get_time()
+            if app_token_inline:
+                user_token_info["app_token"] = app_token_inline
+                user_token_info["app_token_time"] = get_time()
             user_tokens[self.user] = user_token_info
             
             self.log_str += "登录成功，token 已缓存\n"
@@ -346,7 +388,7 @@ class MiMotionRunner:
     def get_app_token(self, login_token):
         url = f"https://account-cn.huami.com/v1/client/app_tokens?app_name=com.xiaomi.hm.health&dn=api-user.huami.com%2Capi-mifit.huami.com%2Capp-analytics.huami.com&login_token={login_token}"
         headers = {'User-Agent': 'MiFit/5.3.0 (iPhone; iOS 14.7.1; Scale/3.00)'}
-        response = requests.get(url, headers=headers).json()
+        response = requests.get(url, headers=headers, timeout=15).json()
         app_token = response['token_info']['app_token']
         # print("app_token获取成功！")
         # print(app_token)
@@ -383,7 +425,7 @@ class MiMotionRunner:
 
         data = f'userid={userid}&last_sync_data_time=1597306380&device_type=0&last_deviceid=DA932FFFFE8816E7&data_json={data_json}'
 
-        response = requests.post(url, data=data, headers=head).json()
+        response = requests.post(url, data=data, headers=head, timeout=15).json()
         # print(response)
         return f"修改步数（{step}）[" + response['message'] + "]", True
 
