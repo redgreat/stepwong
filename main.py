@@ -14,7 +14,6 @@ import time
 import os
 
 import requests
-from Crypto.Cipher import AES
 
 try:
     from Crypto.Cipher import AES
@@ -33,7 +32,7 @@ def get_beijing_time():
 
 
 # 参考自 https://github.com/hanximeng/Zepp_API/blob/main/index.php
-def encrypt_data(plain: bytes) -> bytes:
+def encrypt_login_data(plain: bytes) -> bytes:
     key = b'xeNtBVqzDc6tuNTh'  # 16 bytes
     iv = b'MAAAYAAAAAAAAABg'  # 16 bytes
     cipher = AES.new(key, AES.MODE_CBC, iv)
@@ -249,10 +248,10 @@ class MiMotionRunner:
         query = urllib.parse.urlencode(login_data)
         plaintext = query.encode('utf-8')
         # 执行请求加密
-        cipher_data = encrypt_data(plaintext)
+        cipher_data = encrypt_login_data(plaintext)
 
         url1 = 'https://api-user.zepp.com/v2/registrations/tokens'
-        r1 = requests.post(url1, data=cipher_data, headers=headers, allow_redirects=False)
+        r1 = requests.post(url1, data=cipher_data, headers=login_headers, allow_redirects=False)
         if r1.status_code != 303:
             self.log_str += "登录异常，status: %d\n" % r1.status_code
             return 0, 0
