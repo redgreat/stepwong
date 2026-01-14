@@ -3,6 +3,8 @@ import math
 import traceback
 from datetime import datetime
 import pytz
+import uuid
+import base64
 
 import json
 import random
@@ -11,6 +13,14 @@ import time
 import os
 
 import requests
+
+try:
+    from Crypto.Cipher import AES
+    from Crypto.Random import get_random_bytes
+    AES_AVAILABLE = True
+except ImportError:
+    AES_AVAILABLE = False
+    print("警告: pycryptodome 未安装，token 缓存功能将被禁用")
 
 
 # 获取北京时间
@@ -72,6 +82,72 @@ def get_access_token(location):
     return result[0]
 
 
+# ==================== AES 加密工具函数 ====================
+AES_BLOCK_SIZE = 16  # AES block size
+
+
+def _pkcs7_pad(data: bytes) -> bytes:
+    """PKCS7 填充"""
+    pad_len = AES_BLOCK_SIZE - (len(data) % AES_BLOCK_SIZE)
+    return data + bytes([pad_len]) * pad_len
+
+
+def _pkcs7_unpad(data: bytes) -> bytes:
+    """PKCS7 去填充"""
+    if not data or len(data) % AES_BLOCK_SIZE != 0:
+        raise ValueError(f"invalid padded data length {len(data)}")
+    pad_len = data[-1]
+    if pad_len < 1 or pad_len > AES_BLOCK_SIZE:
+        raise ValueError(f"invalid padding length: {pad_len}")
+    if data[-pad_len:] != bytes([pad_len]) * pad_len:
+        raise ValueError("invalid PKCS#7 padding")
+    return data[:-pad_len]
+
+
+def encrypt_data(plain: bytes, key: bytes) -> bytes:
+    """
+    AES-128-CBC 加密
+    返回：IV（16B） + ciphertext
+    """
+    if not AES_AVAILABLE:
+        raise RuntimeError("AES encryption not available")
+    if len(key) != 16:
+        raise ValueError("key must be 16 bytes for AES-128")
+    
+    # 使用随机IV
+    iv = get_random_bytes(AES_BLOCK_SIZE)
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    padded = _pkcs7_pad(plain)
+    ciphertext = cipher.encrypt(padded)
+    return iv + ciphertext
+
+
+def decrypt_data(data: bytes, key: bytes) -> bytes:
+    """
+    AES-128-CBC 解密
+    输入：IV（16B） + ciphertext
+    返回：明文字节
+    """
+    if not AES_AVAILABLE:
+        raise RuntimeError("AES decryption not available")
+    if len(key) != 16:
+        raise ValueError("key must be 16 bytes for AES-128")
+    if len(data) < AES_BLOCK_SIZE:
+        raise ValueError("data too short")
+    
+    # 从数据中提取IV（前16字节）
+    iv = data[:AES_BLOCK_SIZE]
+    ciphertext = data[AES_BLOCK_SIZE:]
+    
+    if len(ciphertext) == 0 or len(ciphertext) % AES_BLOCK_SIZE != 0:
+        raise ValueError("invalid ciphertext length")
+    
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    decrypted_padded = cipher.decrypt(ciphertext)
+    return _pkcs7_unpad(decrypted_padded)
+# ==================== AES 加密工具函数结束 ====================
+
+
 # pushplus消息推送
 def push_plus(title, content):
     requesturl = f"http://www.pushplus.plus/send"
@@ -99,6 +175,9 @@ class MiMotionRunner:
         password = str(_passwd)
         self.invalid = False
         self.log_str = ""
+        self.device_id = str(uuid.uuid4())  # 生成设备ID
+        self.userid = None  # 用户ID
+        
         if user == '' or password == '':
             self.error = "用户名或密码填写有误！"
             self.invalid = True
@@ -118,7 +197,25 @@ class MiMotionRunner:
 
     # 登录
     def login(self):
-
+        # 尝试从缓存中获取 token
+        user_token_info = user_tokens.get(self.user)
+        if user_token_info is not None:
+            login_token = user_token_info.get("login_token")
+            self.userid = user_token_info.get("userid")
+            self.device_id = user_token_info.get("device_id")
+            
+            if self.device_id is None:
+                self.device_id = str(uuid.uuid4())
+                user_token_info["device_id"] = self.device_id
+            
+            # 尝试使用缓存的 login_token
+            if login_token is not None and self.userid is not None:
+                self.log_str += "使用缓存的 login_token\n"
+                return login_token, self.userid
+            else:
+                self.log_str += f"缓存的 token 不完整，重新登录\n"
+        
+        # 缓存失效或不存在，执行完整登录流程
         url1 = "https://api-user.huami.com/registrations/" + self.user + "/tokens"
         login_headers = {
             "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
@@ -144,8 +241,6 @@ class MiMotionRunner:
         except:
             self.log_str += f"获取accessToken异常:{traceback.format_exc()}\n"
             return 0, 0
-        # print("access_code获取成功！")
-        # print(code)
 
         url2 = "https://account.huami.com/v2/client/login"
         if self.is_phone:
@@ -154,7 +249,7 @@ class MiMotionRunner:
                 "app_version": "4.6.0",
                 "code": f"{code}",
                 "country_code": "CN",
-                "device_id": "2C8B4939-0CCD-4E94-8CBA-CB8EA6E613A1",
+                "device_id": self.device_id,  # 使用实例的 device_id
                 "device_model": "phone",
                 "grant_type": "access_token",
                 "third_name": "huami_phone",
@@ -166,7 +261,7 @@ class MiMotionRunner:
                 "app_version": "6.3.5",
                 "code": f"{code}",
                 "country_code": "CN",
-                "device_id": "2C8B4939-0CCD-4E94-8CBA-CB8EA6E613A1",
+                "device_id": self.device_id,  # 使用实例的 device_id
                 "device_model": "phone",
                 "dn": "api-user.huami.com%2Capi-mifit.huami.com%2Capp-analytics.huami.com",
                 "grant_type": "access_token",
@@ -175,15 +270,53 @@ class MiMotionRunner:
                 "source": "com.xiaomi.hm.health",
                 "third_name": "email",
             }
-        r2 = requests.post(url2, data=data2, headers=login_headers).json()
-        login_token = r2["token_info"]["login_token"]
-        # print("login_token获取成功！")
-        # print(login_token)
-        userid = r2["token_info"]["user_id"]
-        # print("userid获取成功！")
-        # print(userid)
-
-        return login_token, userid
+        
+        # 添加响应检查和错误处理
+        try:
+            r2 = requests.post(url2, data=data2, headers=login_headers)
+            if r2.status_code != 200:
+                self.log_str += f"获取login_token失败，HTTP状态码: {r2.status_code}\n"
+                self.log_str += f"响应内容: {r2.text[:200]}\n"
+                return 0, 0
+            
+            # 尝试解析JSON
+            r2_json = r2.json()
+            
+            # 检查响应中是否包含必要字段
+            if "token_info" not in r2_json:
+                self.log_str += f"响应格式异常，缺少token_info字段\n"
+                self.log_str += f"响应内容: {r2.text[:200]}\n"
+                return 0, 0
+            
+            login_token = r2_json["token_info"]["login_token"]
+            userid = r2_json["token_info"]["user_id"]
+            self.userid = userid
+            
+            # 保存到缓存
+            user_token_info = dict()
+            user_token_info["login_token"] = login_token
+            user_token_info["userid"] = userid
+            user_token_info["device_id"] = self.device_id
+            user_token_info["login_time"] = get_time()
+            user_tokens[self.user] = user_token_info
+            
+            self.log_str += "登录成功，token 已缓存\n"
+            
+            return login_token, userid
+            
+        except requests.exceptions.JSONDecodeError as e:
+            self.log_str += f"解析JSON失败: {str(e)}\n"
+            self.log_str += f"响应状态码: {r2.status_code}\n"
+            self.log_str += f"响应内容: {r2.text[:200]}\n"
+            return 0, 0
+        except KeyError as e:
+            self.log_str += f"响应中缺少必要字段: {str(e)}\n"
+            self.log_str += f"响应内容: {r2.text[:200]}\n"
+            return 0, 0
+        except Exception as e:
+            self.log_str += f"登录过程发生异常: {str(e)}\n"
+            self.log_str += f"{traceback.format_exc()}\n"
+            return 0, 0
 
     # 获取app_token
     def get_app_token(self, login_token):
@@ -276,6 +409,53 @@ def run_single_account(total, idx, user_mi, passwd_mi):
     return exec_result
 
 
+# ==================== Token 缓存管理 ====================
+def prepare_user_tokens() -> dict:
+    """
+    从加密文件中读取 token 缓存
+    返回：token 字典，格式为 {user: {login_token, userid, device_id, ...}}
+    """
+    data_path = r"encrypted_tokens.data"
+    if not os.path.exists(data_path):
+        return dict()
+    
+    if not AES_AVAILABLE or aes_key is None:
+        print("AES 不可用或未配置密钥，跳过 token 缓存加载")
+        return dict()
+    
+    try:
+        with open(data_path, 'rb') as f:
+            data = f.read()
+        decrypted_data = decrypt_data(data, aes_key)
+        # 假设原始明文为 UTF-8 编码文本
+        return json.loads(decrypted_data.decode('utf-8', errors='strict'))
+    except Exception as e:
+        print(f"加载 token 缓存失败: {e}")
+        print("密钥不正确或者加密内容损坏，放弃 token 缓存")
+        return dict()
+
+
+def persist_user_tokens():
+    """
+    将 token 缓存加密保存到文件
+    """
+    if not AES_AVAILABLE or aes_key is None:
+        print("AES 不可用或未配置密钥，跳过 token 缓存保存")
+        return
+    
+    try:
+        data_path = r"encrypted_tokens.data"
+        origin_str = json.dumps(user_tokens, ensure_ascii=False)
+        cipher_data = encrypt_data(origin_str.encode("utf-8"), aes_key)
+        with open(data_path, 'wb') as f:
+            f.write(cipher_data)
+            f.flush()
+        print("Token 缓存已保存")
+    except Exception as e:
+        print(f"保存 token 缓存失败: {e}")
+# ==================== Token 缓存管理结束 ====================
+
+
 def execute():
     try:
         user_list = users.split('#')
@@ -304,6 +484,11 @@ def execute():
                     success_count += 1
             summary = f"\n执行账号总数{total}，成功：{success_count}，失败：{total - success_count}"
             print(summary)
+            
+            # 保存 token 缓存
+            if encrypt_support:
+                persist_user_tokens()
+            
             # 成功后不再推送，异常的时候再推送
             # push_to_push_plus(push_results, summary)
         else:
@@ -317,6 +502,12 @@ def execute():
 if __name__ == "__main__":
     # 北京时间
     time_bj = get_beijing_time()
+    
+    # 初始化 token 缓存相关变量
+    encrypt_support = False
+    user_tokens = dict()
+    aes_key = None
+    
     if os.environ.__contains__("CONFIG") is False:
         print("未配置CONFIG变量，无法执行")
         exit(1)
@@ -329,6 +520,28 @@ if __name__ == "__main__":
             print("CONFIG格式不正确，请检查Secret配置，请严格按照JSON格式：使用双引号包裹字段和值，逗号不能多也不能少")
             traceback.print_exc()
             exit(1)
+        
+        # 初始化 AES 加密支持
+        if os.environ.__contains__("AES_KEY") is True:
+            aes_key_str = os.environ.get("AES_KEY")
+            if aes_key_str is not None and aes_key_str != "":
+                aes_key = aes_key_str.encode('utf-8')
+                if len(aes_key) == 16 and AES_AVAILABLE:
+                    encrypt_support = True
+                    print("AES 加密支持已启用，将使用 token 缓存")
+                    # 加载已保存的 token
+                    user_tokens = prepare_user_tokens()
+                else:
+                    if len(aes_key) != 16:
+                        print("AES_KEY 长度必须为 16 字节")
+                    if not AES_AVAILABLE:
+                        print("pycryptodome 未安装")
+                    print("AES 加密支持未启用，无法使用 token 缓存")
+            else:
+                print("AES_KEY 未设置，无法使用 token 缓存")
+        else:
+            print("未配置 AES_KEY，无法使用 token 缓存")
+        
         PUSH_PLUS_TOKEN = config.get('PUSH_PLUS_TOKEN')
         PUSH_PLUS_HOUR = config.get('PUSH_PLUS_HOUR')
         PUSH_PLUS_MAX = get_int_value_default(config, 'PUSH_PLUS_MAX', 30)
