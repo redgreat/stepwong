@@ -170,6 +170,5 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 .idea
-
-# Token cache file (contains encrypted sensitive data)
 encrypted_tokens.data
+.DS_Store
