@@ -26,6 +26,7 @@ except ImportError:
 
 # 获取北京时间
 def get_beijing_time():
+    # TODO: add type annotations for parameters/return type
     target_timezone = pytz.timezone('Asia/Shanghai')
     # 获取当前时间
     return datetime.now().astimezone(target_timezone)
@@ -44,17 +45,19 @@ def encrypt_login_data(plain: bytes) -> bytes:
 
 # 格式化时间
 def format_now():
+    # TODO: add type annotations for parameters/return type
     return get_beijing_time().strftime("%Y-%m-%d %H:%M:%S")
 
 
 # 获取默认值转int
 def get_int_value_default(_config: dict, _key, default):
+    # TODO: add type annotations for parameters/return type
     _config.setdefault(_key, default)
     return int(_config.get(_key))
 
 
 # 获取当前时间对应的最大和最小步数
-def get_min_max_by_time(hour=None, minute=None):
+def get_min_max_by_time(hour: int=None, minute: int=None) -> tuple:
     if hour is None:
         hour = time_bj.hour
     if minute is None:
@@ -66,13 +69,14 @@ def get_min_max_by_time(hour=None, minute=None):
 
 
 # 虚拟ip地址
-def fake_ip():
+def fake_ip() -> str:
     # 随便找的国内IP段：223.64.0.0 - 223.117.255.255
     return f"{223}.{random.randint(64, 117)}.{random.randint(0, 255)}.{random.randint(0, 255)}"
 
 
 # 账号脱敏
-def desensitize_user_name(user):
+def desensitize_user_name(user) -> str:
+    # TODO: add type annotations for remaining parameters/return type
     if len(user) <= 8:
         ln = max(math.floor(len(user) / 3), 1)
         return f'{user[:ln]}***{user[-ln:]}'
@@ -81,12 +85,14 @@ def desensitize_user_name(user):
 
 # 获取时间戳
 def get_time():
+    # TODO: add type annotations for parameters/return type
     current_time = get_beijing_time()
     return "%.0f" % (current_time.timestamp() * 1000)
 
 
 # 获取登录code
-def get_access_token(location):
+def get_access_token(location) -> None:
+    # TODO: add type annotations for remaining parameters/return type
     code_pattern = re.compile("(?<=access=).*?(?=&)")
     result = code_pattern.findall(location)
     if result is None or len(result) == 0:
@@ -161,7 +167,7 @@ def decrypt_data(data: bytes, key: bytes) -> bytes:
 
 
 # pushplus消息推送
-def push_plus(title, content):
+def push_plus(title: str, content: str) -> None:
     requestUrl = f"http://www.pushplus.plus/send"
     data = {
         "token": PUSH_PLUS_TOKEN,
@@ -183,6 +189,7 @@ def push_plus(title, content):
 
 class MiMotionRunner:
     def __init__(self, _user, _passwd):
+        # TODO: add type annotations for parameters/return type
         user = str(_user)
         password = str(_passwd)
         self.invalid = False
@@ -214,7 +221,7 @@ class MiMotionRunner:
             pass
 
     # 登录
-    def login(self):
+    def login(self) -> tuple:
         # 尝试从缓存中获取 token
         user_token_info = user_tokens.get(self.user)
         if user_token_info is not None:
@@ -386,6 +393,7 @@ class MiMotionRunner:
 
     # 获取app_token
     def get_app_token(self, login_token):
+        # TODO: add type annotations for parameters/return type
         url = f"https://account-cn.huami.com/v1/client/app_tokens?app_name=com.xiaomi.hm.health&dn=api-user.huami.com%2Capi-mifit.huami.com%2Capp-analytics.huami.com&login_token={login_token}"
         headers = {'User-Agent': 'MiFit/5.3.0 (iPhone; iOS 14.7.1; Scale/3.00)'}
         response = requests.get(url, headers=headers, timeout=15).json()
@@ -395,7 +403,8 @@ class MiMotionRunner:
         return app_token
 
     # 主函数
-    def login_and_post_step(self, min_step, max_step):
+    def login_and_post_step(self, min_step, max_step) -> tuple:
+        # TODO: add type annotations for remaining parameters/return type
         if self.invalid:
             return "账号或密码配置有误", False
         step = str(random.randint(min_step, max_step))
@@ -431,8 +440,9 @@ class MiMotionRunner:
 
 
 # 启动主函数
-def push_to_push_plus(exec_results, summary):
+def push_to_push_plus(exec_results, summary) -> None:
     # 判断是否需要pushplus推送
+    # TODO: add type annotations for remaining parameters/return type
     if PUSH_PLUS_TOKEN is not None and PUSH_PLUS_TOKEN != '' and PUSH_PLUS_TOKEN != 'NO':
         if PUSH_PLUS_HOUR is not None and PUSH_PLUS_HOUR.isdigit():
             if time_bj.hour != int(PUSH_PLUS_HOUR):
@@ -453,7 +463,8 @@ def push_to_push_plus(exec_results, summary):
         push_plus(f"{format_now()} 刷步数通知", html)
 
 
-def run_single_account(total, idx, user_mi, passwd_mi):
+def run_single_account(total, idx: int, user_mi, passwd_mi):
+    # TODO: add type annotations for remaining parameters/return type
     idx_info = ""
     if idx is not None:
         idx_info = f"[{idx + 1}/{total}]"
@@ -500,7 +511,7 @@ def prepare_user_tokens() -> dict:
         return dict()
 
 
-def persist_user_tokens():
+def persist_user_tokens() -> None:
     """
     将 token 缓存加密保存到文件
     """
@@ -521,7 +532,7 @@ def persist_user_tokens():
 # ==================== Token 缓存管理结束 ====================
 
 
-def execute():
+def execute() -> None:
     user_list = users.split('#')
     passwd_list = passwords.split('#')
     exec_results = []
