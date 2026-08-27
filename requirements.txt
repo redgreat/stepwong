@@ -4,5 +4,5 @@ idna==3.10
 pycryptodome==3.23.0
 pytz==2024.2
 requests==2.32.3
-urllib3==2.3.0
+urllib3==2.6.0
 pycryptodome==3.21.0
