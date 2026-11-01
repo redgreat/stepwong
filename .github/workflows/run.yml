@@ -18,9 +18,9 @@ jobs:
           sudo -E apt-get install zsh -y
           
       - name: Init Python
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v5
         with:
-          python-version: 3.8
+          python-version: '3.14'
           
       - name: Start
         env:

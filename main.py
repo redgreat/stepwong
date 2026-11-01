@@ -181,6 +181,35 @@ def push_plus(title, content):
         print("pushplus推送异常")
 
 
+# 查询用户在华米云端绑定的手环/手表设备ID
+def get_user_device_id(app_token, userid):
+    url = f"https://api-mifit-cn.huami.com/v1/device/binds.json?userid={userid}"
+    headers = {
+        "apptoken": app_token,
+        "User-Agent": "MiFit6.14.0 (M2007J1SC; Android 12; Density/2.75)"
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=5).json()
+        items = resp.get("items", [])
+        if items:
+            # 优先匹配 deviceType == 0（手环/手表）
+            for item in items:
+                if item.get("deviceType") == 0:
+                    dev_id = item.get("deviceId") or item.get("mac")
+                    if dev_id:
+                        return str(dev_id).replace(":", "").upper()
+            # 备选：按名称匹配
+            for item in items:
+                name = str(item.get("productName", "")).lower()
+                if any(k in name for k in ["band", "watch", "手环", "手表"]):
+                    dev_id = item.get("deviceId") or item.get("mac")
+                    if dev_id:
+                        return str(dev_id).replace(":", "").upper()
+    except Exception as e:
+        print(f"查询设备列表异常: {e}")
+    return None
+
+
 class MiMotionRunner:
     def __init__(self, _user, _passwd):
         user = str(_user)
@@ -417,13 +446,22 @@ class MiMotionRunner:
         data_json = re.sub(finddate.findall(data_json)[0], today, str(data_json))
         data_json = re.sub(findstep.findall(data_json)[0], step, str(data_json))
 
-        url = f'https://api-mifit-cn.huami.com/v1/data/band_data.json?&t={t}'
+        # 华米对未绑定过真实设备的账号会校验 last_deviceid，优先使用账号实际绑定的设备
+        bound_device_id = get_user_device_id(app_token, userid)
+        target_dev_id = bound_device_id if bound_device_id else "DA932FFFFE8816E7"
+        if bound_device_id:
+            self.log_str += f"使用绑定设备ID:{target_dev_id}\n"
+            data_json = str(data_json).replace("DA932FFFFE8816E7", target_dev_id)
+        else:
+            self.log_str += "未查询到绑定设备，使用默认设备ID\n"
+
+        url = f'https://api-mifit-cn.huami.com/v1/data/band_data.json?&t={t}&r={str(uuid.uuid4())}'
         head = {
             "apptoken": app_token,
             "Content-Type": "application/x-www-form-urlencoded"
         }
 
-        data = f'userid={userid}&last_sync_data_time=1597306380&device_type=0&last_deviceid=DA932FFFFE8816E7&data_json={data_json}'
+        data = f'userid={userid}&last_sync_data_time=1597306380&device_type=0&last_deviceid={target_dev_id}&data_json={data_json}'
 
         response = requests.post(url, data=data, headers=head, timeout=15).json()
         # print(response)
